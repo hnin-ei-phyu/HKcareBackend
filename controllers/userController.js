@@ -5,6 +5,7 @@ import jwt from 'jsonwebtoken'
 import { v2 as cloudinary } from 'cloudinary'
 import doctorModel from '../models/doctorModel.js'
 import appointmentModel from '../models/appointmentModel.js'
+import omiseModule from 'omise'
 
 
 
@@ -221,5 +222,115 @@ const listAppointment = async (req, res) => {
     }
 }
 
+//API to cancel appointment
+const cancelAppointment = async (req, res) => {
+    try {
+         const userId = req.user.id;         // from token
+        const { appointmentId } = req.body; // from frontend body
+        const appointmentData = await appointmentModel.findById(appointmentId)
 
-export { registerUser, loginUser, getProfile, updateProfile, removePhoto, bookAppointment, listAppointment }
+        //verify appointment user
+        if (appointmentData.userId.toString() !== userId.toString()) {
+            return res.json({ success: false, message: "Unauthorized Action!"})
+        }
+
+        await appointmentModel.findByIdAndUpdate(appointmentId, { cancelled: true })
+
+        //releasing doctor slot
+        const { docId, slotDate, slotTime } = appointmentData
+        const docData = await doctorModel.findById(docId)
+        let slots_booked = docData.slots_booked
+
+        slots_booked[slotDate] = slots_booked[slotDate].filter(e => e !== slotTime)
+
+        await doctorModel.findByIdAndUpdate(docId, { slots_booked })
+        res.json({ success: true, message: "Appointment Cancelled Successfully!" })
+        
+    } catch (error) {
+        console.log(error);
+        res.json({ success: false, message: error.message });
+    }
+}
+        
+
+
+//API for online payment #using Omise for payment method
+const paymentOmise = async (req, res) => {
+    
+    try {
+        
+        // Initialize Omise (ESM compatible)
+        const omise = omiseModule({
+            publicKey: process.env.OMISE_PUBLIC_KEY,
+            secretKey: process.env.OMISE_SECRET_KEY
+        
+        });
+
+        const { appointmentId, token } = req.body;
+        const appointmentData = await appointmentModel.findById(appointmentId);
+
+        if (!appointmentData || appointmentData.cancelled) {
+        return res.json({ success: false, message: "Appointment cancelled or not found!" });
+        }
+        
+
+        const charge = await omise.charges.create({
+            amount: appointmentData.amount * 100, // satang
+            currency: process.env.CURRENCY,
+            card: token,
+            description: `Payment for appointment ${appointmentId}`,
+            metadata: {
+                receipt: appointmentId
+            }
+        });
+
+    if (charge.status === "successful") {
+        // send charge.id back to frontend
+        return res.json({ success: true, chargeId: charge.id, message: "Payment successful" }, charge);
+    } else {
+        return res.json({ success: false, message: "Payment failed", charge });
+    }
+
+        
+  } catch (error) {
+    console.error(error);
+    res.json({ success: false, message: error.message });
+  }
+};
+
+//API to verify payment of Omisepayment
+const verifyPayment = async (req, res) => {
+    // Initialize Omise (ESM compatible)
+    const omise = omiseModule({
+        publicKey: process.env.OMISE_PUBLIC_KEY,
+        secretKey: process.env.OMISE_SECRET_KEY
+    
+    });
+   
+    const { chargeId } = req.body
+
+
+    try {
+        //Retrieve the Charge object from Omise to check its final status
+        const verifiedCharge = await omise.charges.retrieve(chargeId);
+
+        // Retrieve your appointmentId from metadata
+        const appointmentId = verifiedCharge.metadata?.receipt;
+
+        if (verifiedCharge.status === 'successful') {
+            await appointmentModel.findByIdAndUpdate(appointmentId, { payment: true })
+            res.json({success: true, message: "Payment Successful!"})
+        } else {
+            res.json({ success: false, message: "Payment Failed!"})
+        }
+       
+        
+        
+    } catch (error) {
+        console.error(error);
+        res.json({ success: false, message: error.message });
+    }
+}
+
+
+export { registerUser, loginUser, getProfile, updateProfile, removePhoto, bookAppointment, listAppointment, cancelAppointment, paymentOmise, verifyPayment }

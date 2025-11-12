@@ -9,8 +9,14 @@ import userRouter from './routes/userRoute.js'
 
 //app config
 dotenv.config()
+
 const app = express()
 const port = process.env.PORT || 4000
+
+// check env keys
+console.log("OMISE_SECRET_KEY:", process.env.OMISE_SECRET_KEY)
+console.log("OMISE_PUBLIC_KEY:", process.env.OMISE_PUBLIC_KEY)
+
 connectDB()
 connectCloudinary()
 
